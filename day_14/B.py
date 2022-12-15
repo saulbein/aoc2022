@@ -1,8 +1,13 @@
 import re
 from argparse import ArgumentParser
+from concurrent.futures import (ProcessPoolExecutor, ThreadPoolExecutor,
+                                as_completed)
 from dataclasses import dataclass
+from itertools import repeat
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional
+
+from tqdm import tqdm
 
 SENSOR_REGEX = (
     r"Sensor at x=(-?\d+), y=(-?\d+): closest beacon is at x=(-?\d+), y=(-?\d+)"
@@ -68,11 +73,29 @@ def main() -> None:
 
 def solve(input_path: Path, y: int) -> None:
     with open(input_path, "r") as lines:
-        sensors = (parse_sensor(line) for line in lines)
-        coverages = (find_intersection(sensor, y) for sensor in sensors)
+        sensors = [parse_sensor(line) for line in lines]
+
+    with ProcessPoolExecutor() as executor:
+        batch_size = 10_000
+        batches = [Range(i, i+ batch_size) for i in range(0, y - batch_size, batch_size)]
+        futures = [executor.submit(check_coverage, sensors, batch) for batch in batches]
+        with tqdm(total=len(batches)) as pbar:
+            for future in as_completed(futures):
+                pbar.update(1)
+                result = future.result()
+                if result is not None:
+                    print(result.x * 4000000 + result.y)
+                    break
+
+
+def check_coverage(sensors: Iterable[Sensor], y_range: Range) -> Optional[Point]:
+    for y_row in range(y_range.left, y_range.right):
+        coverages = (find_intersection(sensor, y_row) for sensor in sensors)
         relevant = (r for r in coverages if r is not None)
         ranges = simplify_ranges(relevant)
-        print(sum((range.length for range in ranges)))
+        if len(ranges) > 1:
+            return Point(x=ranges[0].right + 1, y=y_row)
+    return None
 
 
 def parse_sensor(line: str) -> Sensor:
